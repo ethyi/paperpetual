@@ -9,6 +9,7 @@ import Layout from "../components/layout";
 import useSWR from "swr";
 import { Input } from "@mui/material";
 import { createSecureContext } from "tls";
+import { setCookie, getCookie, hasCookie, setCookies } from "cookies-next";
 
 const fetcher = async (
   input: RequestInfo,
@@ -18,31 +19,71 @@ const fetcher = async (
   const res = await fetch(input, init);
   return res.json();
 };
-
+const pairs = {
+  FTX: [
+    ["ftx/futures/BTC-PERP", "BTC-PERP"],
+    ["ftx/futures/ETH-PERP", "ETH-PERP"],
+    ["ftx/futures/SOL-PERP", "SOL-PERP"],
+  ],
+};
+interface APIData {
+  name: string;
+  volume: string;
+  change: number;
+  ask: number;
+  last: number;
+  bid: number;
+  source: string;
+}
 const Home: NextPage = () => {
   interface Portfolio {
     [key: string]: { amount: number; average: number };
   }
-  const [portfolio, setPortfolio] = useState<Portfolio>({});
-  // get from cookies or wallet
-  let [userBalance, setUserBalance] = useState({
+  let initPortfolio = {};
+  let initBalance = {
     balance: 10000,
     buyingPower: 10000,
     pnl: 0,
     currentPortfolio: 0,
     initialPortfolio: 0,
-  });
+  };
 
-  const amount = useRef("");
+  if (hasCookie("portfolio") && hasCookie("balance")) {
+    let [tempPort, tempBalance] = [
+      getCookie("portfolio"),
+      getCookie("balance"),
+    ];
+    if (tempPort && tempBalance) {
+      initPortfolio = JSON.parse(tempPort.toString());
+      initBalance = JSON.parse(tempBalance.toString());
+    }
+
+    // initPortfolio = tempPort;
+    // if (!!tempBalance) initBalance = tempBalance;
+  }
+  const [portfolio, setPortfolio] = useState<Portfolio>(initPortfolio);
+  // get from cookies or wallet
+  let [userBalance, setUserBalance] = useState(initBalance);
+  setCookie("portfolio", portfolio);
+  setCookie("balance", userBalance);
+
+  // const amount = useRef("");
+  const [amount, setAmount] = useState("");
   const [amountErr, setAmountErr] = useState(false);
   const [isBuy, setIsBuy] = useState(true);
-  const { data, isLoading, isError } = useFTX();
-  function useFTX() {
-    let { data, error } = useSWR("/api/ftx/markets/ETH/USD", fetcher, {
+  const [pair, setPair] = useState("BTC-PERP");
+  // const { data, isLoading, isError } = useFTX(pair);
+  const { allData, allLoading, allError } = useAllData();
+  let isLoading = allLoading;
+  let isError = allError;
+  let data = allData[pair];
+
+  function useFTX(pairAPIUrl: string) {
+    let { data, error } = useSWR(pairAPIUrl, fetcher, {
       refreshInterval: 100,
     });
     let isLoading = !error && !data;
-    if (isLoading) {
+    if (isLoading || error) {
       return {
         data: {},
         isLoading,
@@ -59,18 +100,57 @@ const Home: NextPage = () => {
       bid: data.bid,
       source: "FTX",
     };
-    let updatedData = { [data.name]: data.last };
-    updateUserBalance(updatedData);
+    // let updatedData = { [data.name]: data.last };
+    // updateUserBalance(updatedData);
     return {
       data,
       isLoading,
       isError: error,
     };
   }
-  function updateUserBalance(updatedData: { [key: string]: number }) {
+  function useAllData() {
+    let allData: { [key: string]: APIData } = {};
+    let err = false;
+    Object.entries(pairs).forEach(([exchange, exchangePairs], index) => {
+      exchangePairs.forEach(([pairUrl, pairName], index) => {
+        // eslint-disable-next-line react-hooks/rules-of-hooks
+        let { data, error } = useSWR(pairUrl, fetcher, {
+          refreshInterval: 2000,
+        });
+        let allLoading = !error && !data;
+        if (allLoading || error) {
+          err = true;
+          return;
+        }
+        data = data.result;
+
+        data = {
+          name: data.name,
+          volume: Math.round(data.volumeUsd24h).toLocaleString(),
+          change: (parseFloat(data.change24h) * 100).toFixed(2),
+          ask: data.ask,
+          last: data.last,
+          bid: data.bid,
+          source: "FTX",
+        };
+
+        allData[pairName] = data;
+      });
+    });
+    if (err) {
+      return {
+        allData: {},
+        allLoading: false,
+        allError: false,
+      };
+    }
+    updateUserBalance(allData);
+    return { allData, allLoading: false, allError: false };
+  }
+  function updateUserBalance(updatedData: { [key: string]: APIData }) {
     const currentPortfolio = Object.entries(portfolio).reduce(
       (acc, [key, value]) => {
-        return acc + (value.amount / value.average) * updatedData[key];
+        return acc + (value.amount / value.average) * updatedData[key].last;
       },
       0
     );
@@ -94,17 +174,17 @@ const Home: NextPage = () => {
 
   function handleExecute(e: React.FormEvent) {
     e.preventDefault();
-    let num = +amount.current;
-    console.log(num);
-    console.log(typeof num);
+    let num = +amount;
+
     if (!num || num <= 0) {
       setAmountErr(true);
       return;
     }
 
     let oldValue = portfolio[data.name];
-    if (isBuy) {
+    if (isBuy && userBalance.buyingPower > 0) {
       num = Math.min(num, userBalance.buyingPower);
+      setAmount(num.toString());
       setAmountErr(false);
       setUserBalance({
         ...userBalance,
@@ -132,9 +212,10 @@ const Home: NextPage = () => {
       }
       return;
     }
-    let current = (data.bid * oldValue.amount) / oldValue.average;
-    if (!isBuy) {
+    if (!isBuy && data.name in portfolio) {
+      let current = (data.bid * oldValue.amount) / oldValue.average;
       num = Math.min(num, current);
+      setAmount(num.toString());
       setAmountErr(false);
 
       setUserBalance({
@@ -160,12 +241,11 @@ const Home: NextPage = () => {
     }
     setAmountErr(true);
   }
-
-  if (isError) {
+  if (isError || allError) {
     return <div>failed to load</div>;
   }
-  if (isLoading) return <div>loading...</div>;
-
+  if (isLoading || allLoading || !data || !allData)
+    return <div>loading...</div>;
   return (
     <Layout>
       <div className="p-16 px-96 h-full">
@@ -174,6 +254,25 @@ const Home: NextPage = () => {
             key="stats"
             className="row-start-1 row-span-3 col-start-1 col-end-2 flex flex-col justify-center"
           >
+            <div>
+              {Object.entries(pairs).map(([exchange, exchangePairs], index) => (
+                <div key={exchange}>
+                  {exchange}:
+                  {exchangePairs.map(([pairUrl, pairName], index) => (
+                    <Button
+                      variant={pairName === pair ? "contained" : "outlined"}
+                      key={exchange + index}
+                      onClick={(e) =>
+                        setPair((e.target as HTMLButtonElement).value)
+                      }
+                      value={pairName}
+                    >
+                      {`${pairName}: ${allData[pairName]?.last} Vol:${allData[pairName]?.volume}, Change: ${allData[pairName]?.change}`}
+                    </Button>
+                  ))}
+                </div>
+              ))}
+            </div>
             <div className="border border-black">TICKER: {data.name}</div>
             <div className="border border-black">
               24h volume: ${data.volume}
@@ -217,8 +316,9 @@ const Home: NextPage = () => {
                 label="Amount in USD"
                 variant="filled"
                 onChange={(e) => {
-                  amount.current = e.target.value;
+                  setAmount(e.target.value);
                 }}
+                value={amount}
               />
             ) : (
               <TextField
@@ -229,8 +329,9 @@ const Home: NextPage = () => {
                 helperText="Enter a valid number"
                 variant="filled"
                 onChange={(e) => {
-                  amount.current = e.target.value;
+                  setAmount(e.target.value);
                 }}
+                value={amount}
               />
             )}
 
@@ -253,9 +354,10 @@ const Home: NextPage = () => {
                 <div key={token}>{`${token}: ${
                   value.amount / value.average
                 }, average ${value.average}, current: ${
-                  (data.last * value.amount) / value.average
+                  (allData[token].last * value.amount) / value.average
                 }, initial: ${value.amount}, positon pnl: ${
-                  (data.last * value.amount) / value.average - value.amount
+                  (allData[token].last * value.amount) / value.average -
+                  value.amount
                 }`}</div>
               ))}
             </>

@@ -5,7 +5,7 @@ const nextConfig = {
   async rewrites() {
     return [
       {
-        source: "/api/ftx/:path*",
+        source: "/ftx/:path*",
         destination: "https://ftx.com/api/:path*",
       },
     ];
