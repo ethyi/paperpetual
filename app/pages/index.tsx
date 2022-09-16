@@ -11,6 +11,73 @@ import { Input } from "@mui/material";
 import { createSecureContext } from "tls";
 import { setCookie, getCookie, hasCookie, setCookies } from "cookies-next";
 
+import { WalletNotConnectedError } from "@solana/wallet-adapter-base";
+
+import {
+  WalletDisconnectButton,
+  WalletMultiButton,
+} from "@solana/wallet-adapter-react-ui";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
+import { FC, useCallback } from "react";
+
+export const SendSOLToRandomAddress: FC = () => {
+  const { connection } = useConnection();
+  const { publicKey, sendTransaction } = useWallet();
+
+  const onClick = useCallback(async () => {
+    if (!publicKey) throw new WalletNotConnectedError();
+
+    let fundingAddress = publicKey;
+    let tradeAccountAddress = Keypair.generate();
+    const keys = [
+      {
+        pubkey: fundingAddress,
+        isSigner: true,
+        isWritable: true,
+      },
+      {
+        pubkey: tradeAccountAddress,
+        isSigner: true,
+        isWritable: true,
+      },
+      {
+        pubkey: SystemProgram.programId,
+        isSigner: false,
+        isWritable: false,
+      },
+    ];
+    const programId = "CKGGMgd8CQgJMRhUYjai2F8QwAGKKsaDz559PbUghjbS";
+    const transaction = new Transaction().add(
+      new TransactionInstruction({
+        keys,
+        programId,
+        data: Buffer.from([10000, [0, 0, 0, 0, 0, 0]]),
+      })
+    );
+
+    const {
+      context: { slot: minContextSlot },
+      value: { blockhash, lastValidBlockHeight },
+    } = await connection.getLatestBlockhashAndContext();
+
+    const signature = await sendTransaction(transaction, connection, {
+      minContextSlot,
+    });
+
+    await connection.confirmTransaction({
+      blockhash,
+      lastValidBlockHeight,
+      signature,
+    });
+  }, [publicKey, sendTransaction, connection]);
+
+  return (
+    <button onClick={onClick} disabled={!publicKey}>
+      Send SOL to a random address!
+    </button>
+  );
+};
 const fetcher = async (
   input: RequestInfo,
   init: RequestInit,
@@ -19,6 +86,7 @@ const fetcher = async (
   const res = await fetch(input, init);
   return res.json();
 };
+
 const pairs = {
   FTX: [
     ["ftx/futures/BTC-PERP", "BTC-PERP"],
@@ -78,36 +146,6 @@ const Home: NextPage = () => {
   let isError = allError;
   let data = allData[pair];
 
-  function useFTX(pairAPIUrl: string) {
-    let { data, error } = useSWR(pairAPIUrl, fetcher, {
-      refreshInterval: 100,
-    });
-    let isLoading = !error && !data;
-    if (isLoading || error) {
-      return {
-        data: {},
-        isLoading,
-        isError: error,
-      };
-    }
-    data = data.result;
-    data = {
-      name: data.name,
-      volume: Math.round(data.volumeUsd24h).toLocaleString(),
-      change: (parseFloat(data.change24h) * 100).toFixed(2),
-      ask: data.ask,
-      last: data.last,
-      bid: data.bid,
-      source: "FTX",
-    };
-    // let updatedData = { [data.name]: data.last };
-    // updateUserBalance(updatedData);
-    return {
-      data,
-      isLoading,
-      isError: error,
-    };
-  }
   function useAllData() {
     let allData: { [key: string]: APIData } = {};
     let err = false;
@@ -249,6 +287,12 @@ const Home: NextPage = () => {
   return (
     <Layout>
       <div className="p-16 px-96 h-full">
+        <Button variant="contained">
+          <WalletMultiButton />
+        </Button>
+        <SendSOLToRandomAddress />
+        <WalletDisconnectButton />
+
         <div className="border border-black w-full h-full grid gap-4">
           <div
             key="stats"

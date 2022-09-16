@@ -12,7 +12,6 @@ describe("paperpetual-program", () => {
   const tradeAccountKeyPair = anchor.web3.Keypair.generate();
   // the user
   const authority = anchor.AnchorProvider.env().wallet;
-
   const buyingPower = 9690.12;
   const portfolio = [200, 10, 0, 0, 0, 0];
   it("Is initialized!", async () => {
