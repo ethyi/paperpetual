@@ -1,14 +1,14 @@
 [features]
 seeds = false
 skip-lint = false
-[programs.localnet]
-paperpetual_program = "CKGGMgd8CQgJMRhUYjai2F8QwAGKKsaDz559PbUghjbS"
+[programs.devnet]
+paperpetual_program = "EkSeBQi7LrfwoiyGbqBxPMReRN5u9wZuxQ2f72HDaEhP"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "/home/stpkey/.config/solana/id.json"
 
 [scripts]

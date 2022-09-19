@@ -1,0 +1,107 @@
+{
+  "version": "0.1.0",
+  "name": "paperpetual_program",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        {
+          "name": "tradeAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "buyingPower",
+          "type": "f64"
+        },
+        {
+          "name": "portfolio",
+          "type": {
+            "array": [
+              "f64",
+              6
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "update",
+      "accounts": [
+        {
+          "name": "tradeAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "buyingPower",
+          "type": "f64"
+        },
+        {
+          "name": "portfolio",
+          "type": {
+            "array": [
+              "f64",
+              6
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "TradeAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "buyingPower",
+            "type": "f64"
+          },
+          {
+            "name": "portfolio",
+            "type": {
+              "array": [
+                "f64",
+                6
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidAuthority"
+    }
+  ],
+  "metadata": {
+    "address": "EkSeBQi7LrfwoiyGbqBxPMReRN5u9wZuxQ2f72HDaEhP"
+  }
+}

@@ -9,7 +9,7 @@ import Layout from "../components/layout";
 import useSWR from "swr";
 import { Input } from "@mui/material";
 import { createSecureContext } from "tls";
-import { setCookie, getCookie, hasCookie, setCookies } from "cookies-next";
+import { setCookie, getCookie, hasCookie, deleteCookie } from "cookies-next";
 
 import { WalletNotConnectedError } from "@solana/wallet-adapter-base";
 
@@ -17,67 +17,29 @@ import {
   WalletDisconnectButton,
   WalletMultiButton,
 } from "@solana/wallet-adapter-react-ui";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
-import { FC, useCallback } from "react";
+import {
+  AnchorWallet,
+  ConnectionContextState,
+  useAnchorWallet,
+  useConnection,
+  useWallet,
+} from "@solana/wallet-adapter-react";
+import {
+  Keypair,
+  SystemProgram,
+  Transaction,
+  PublicKey,
+  Connection,
+} from "@solana/web3.js";
+import {
+  AnchorProvider,
+  Program,
+  web3,
+  utils,
+  BN,
+  Idl,
+} from "@project-serum/anchor";
 
-export const SendSOLToRandomAddress: FC = () => {
-  const { connection } = useConnection();
-  const { publicKey, sendTransaction } = useWallet();
-
-  const onClick = useCallback(async () => {
-    if (!publicKey) throw new WalletNotConnectedError();
-
-    let fundingAddress = publicKey;
-    let tradeAccountAddress = Keypair.generate();
-    const keys = [
-      {
-        pubkey: fundingAddress,
-        isSigner: true,
-        isWritable: true,
-      },
-      {
-        pubkey: tradeAccountAddress,
-        isSigner: true,
-        isWritable: true,
-      },
-      {
-        pubkey: SystemProgram.programId,
-        isSigner: false,
-        isWritable: false,
-      },
-    ];
-    const programId = "CKGGMgd8CQgJMRhUYjai2F8QwAGKKsaDz559PbUghjbS";
-    const transaction = new Transaction().add(
-      new TransactionInstruction({
-        keys,
-        programId,
-        data: Buffer.from([10000, [0, 0, 0, 0, 0, 0]]),
-      })
-    );
-
-    const {
-      context: { slot: minContextSlot },
-      value: { blockhash, lastValidBlockHeight },
-    } = await connection.getLatestBlockhashAndContext();
-
-    const signature = await sendTransaction(transaction, connection, {
-      minContextSlot,
-    });
-
-    await connection.confirmTransaction({
-      blockhash,
-      lastValidBlockHeight,
-      signature,
-    });
-  }, [publicKey, sendTransaction, connection]);
-
-  return (
-    <button onClick={onClick} disabled={!publicKey}>
-      Send SOL to a random address!
-    </button>
-  );
-};
 const fetcher = async (
   input: RequestInfo,
   init: RequestInit,
@@ -94,6 +56,12 @@ const pairs = {
     ["ftx/futures/SOL-PERP", "SOL-PERP"],
   ],
 };
+const portfolioIndices = ["BTC-PERP", "ETH-PERP", "SOL-PERP"];
+const portfolioFields: { [key: string]: number } = {
+  "BTC-PERP": 0,
+  "ETH-PERP": 1,
+  "SOL-PERP": 2,
+};
 interface APIData {
   name: string;
   volume: string;
@@ -103,10 +71,26 @@ interface APIData {
   bid: number;
   source: string;
 }
+
+interface Portfolio {
+  [key: string]: { amount: number; average: number };
+}
+interface Balance {
+  balance: number;
+  buyingPower: number;
+  pnl: number;
+  currentPortfolio: number;
+  initialPortfolio: number;
+}
+
+const idl: Idl = require("../public/idl.json");
+const utf8 = utils.bytes.utf8;
+
 const Home: NextPage = () => {
-  interface Portfolio {
-    [key: string]: { amount: number; average: number };
-  }
+  const [isWallet, setIsWallet] = useState(hasCookie("wallet"));
+  const [isInitialize, setIsInitialize] = useState(false);
+  const anchorWallet = useAnchorWallet();
+  const { connection } = useConnection();
   let initPortfolio = {};
   let initBalance = {
     balance: 10000,
@@ -115,37 +99,201 @@ const Home: NextPage = () => {
     currentPortfolio: 0,
     initialPortfolio: 0,
   };
-
-  if (hasCookie("portfolio") && hasCookie("balance")) {
-    let [tempPort, tempBalance] = [
-      getCookie("portfolio"),
-      getCookie("balance"),
-    ];
-    if (tempPort && tempBalance) {
-      initPortfolio = JSON.parse(tempPort.toString());
-      initBalance = JSON.parse(tempBalance.toString());
-    }
-
-    // initPortfolio = tempPort;
-    // if (!!tempBalance) initBalance = tempBalance;
-  }
   const [portfolio, setPortfolio] = useState<Portfolio>(initPortfolio);
-  // get from cookies or wallet
-  let [userBalance, setUserBalance] = useState(initBalance);
-  setCookie("portfolio", portfolio);
-  setCookie("balance", userBalance);
+  let [userBalance, setUserBalance] = useState<Balance>(initBalance);
 
-  // const amount = useRef("");
   const [amount, setAmount] = useState("");
   const [amountErr, setAmountErr] = useState(false);
   const [isBuy, setIsBuy] = useState(true);
   const [pair, setPair] = useState("BTC-PERP");
-  // const { data, isLoading, isError } = useFTX(pair);
+
   const { allData, allLoading, allError } = useAllData();
+
   let isLoading = allLoading;
   let isError = allError;
   let data = allData[pair];
 
+  async function getTradeAccount(anchorWallet: AnchorWallet) {
+    const provider = new AnchorProvider(connection, anchorWallet, {
+      preflightCommitment: "confirmed",
+    });
+    const program = new Program(idl, idl.metadata.address, provider);
+    const [tradePDA] = await web3.PublicKey.findProgramAddress(
+      [utf8.encode("trade"), anchorWallet.publicKey.toBuffer()],
+      program.programId
+    );
+
+    const tradeAccount = await program.account.tradeAccount.fetchNullable(
+      tradePDA
+    );
+    return tradeAccount;
+  }
+  useEffect(() => {
+    const getInitialAccount = async function (
+      isWallet: boolean,
+      connection: Connection,
+      anchorWallet?: AnchorWallet
+    ) {
+      let initPortfolio: Portfolio = {};
+      let initBalance = {
+        balance: 10000,
+        buyingPower: 10000,
+        pnl: 0,
+        currentPortfolio: 0,
+        initialPortfolio: 0,
+      };
+      if (isWallet && anchorWallet) {
+        const provider = new AnchorProvider(connection, anchorWallet, {
+          preflightCommitment: "confirmed",
+        });
+        const program = new Program(idl, idl.metadata.address, provider);
+        const [tradePDA] = await web3.PublicKey.findProgramAddress(
+          [utf8.encode("trade"), anchorWallet.publicKey.toBuffer()],
+          program.programId
+        );
+
+        const tradeAccount = await program.account.tradeAccount.fetchNullable(
+          tradePDA
+        );
+        if (tradeAccount === null) {
+          setIsInitialize(false);
+          return;
+        }
+        setIsInitialize(true);
+        if (
+          typeof tradeAccount.buyingPower != "number" ||
+          typeof tradeAccount.portfolio != "object" ||
+          tradeAccount.portfolio === null
+        ) {
+          console.error;
+          return;
+        }
+
+        const accBuyingPower: number = tradeAccount.buyingPower;
+
+        const accPortfolio = tradeAccount.portfolio as number[];
+
+        initBalance = { ...initBalance, buyingPower: accBuyingPower };
+        portfolioIndices.forEach(function (value, i) {
+          let index = 2 * i;
+
+          if (accPortfolio[index] === 0) return;
+          initPortfolio[value] = {
+            amount: accPortfolio[index],
+            average: accPortfolio[index + 1],
+          };
+        });
+        console.log(initPortfolio);
+      } else if (hasCookie("portfolio") && hasCookie("balance")) {
+        let [tempPort, tempBalance] = [
+          getCookie("portfolio"),
+          getCookie("balance"),
+        ];
+        if (tempPort && tempBalance) {
+          initPortfolio = JSON.parse(tempPort.toString());
+          initBalance = JSON.parse(tempBalance.toString());
+        }
+      }
+      console.log(initPortfolio);
+      console.log(initBalance);
+      setPortfolio(initPortfolio);
+      setUserBalance(initBalance);
+    };
+    getInitialAccount(isWallet, connection, anchorWallet).catch(console.error);
+  }, [connection, anchorWallet, isWallet]);
+  async function initialize() {
+    let inputBuyingPower = 10000;
+    let inputPortfolio = [0, 0, 0, 0, 0, 0];
+    if (!anchorWallet) return;
+    const provider = new AnchorProvider(connection, anchorWallet, {
+      preflightCommitment: "confirmed",
+    });
+    console.log(idl.metadata);
+    console.log(idl);
+    // let programID = new PublicKey(')
+    const program = new Program(idl, idl.metadata.address, provider);
+    try {
+      const [tradePDA] = await web3.PublicKey.findProgramAddress(
+        [utf8.encode("trade"), anchorWallet.publicKey.toBuffer()],
+        program.programId
+      );
+
+      await program.methods
+        .initialize(inputBuyingPower, inputPortfolio)
+        .accounts({
+          tradeAccount: tradePDA,
+          authority: anchorWallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      const tradeAccount = await program.account.tradeAccount.fetchNullable(
+        tradePDA
+      );
+      if (tradeAccount === null) {
+        setIsInitialize(false);
+        return;
+      }
+      setIsInitialize(true);
+      if (
+        typeof tradeAccount.buyingPower != "number" ||
+        typeof tradeAccount.portfolio != "object" ||
+        tradeAccount.portfolio === null
+      ) {
+        console.error;
+        return;
+      }
+
+      const accBuyingPower: number = tradeAccount.buyingPower;
+      const accPortfolio = tradeAccount.portfolio as number[];
+      console.log("tradeAccount");
+
+      let tradeBalance = { ...userBalance, buyingPower: accBuyingPower };
+      let tradePortfolio: Portfolio = {};
+      portfolioIndices.forEach(function (value, i) {
+        let index = 2 * i;
+
+        if (accPortfolio[index] === 0) return;
+        tradePortfolio[value] = {
+          amount: accPortfolio[index],
+          average: accPortfolio[index + 1],
+        };
+      });
+      setUserBalance(tradeBalance);
+      setPortfolio(tradePortfolio);
+    } catch (err) {
+      console.log(err);
+    }
+  }
+
+  async function update(inputBuyingPower: number, inputPortfolio: number[]) {
+    // let inputBuyingPower = 10000;
+    // let inputPortfolio = [0, 0, 0, 0, 0, 0];
+    if (!anchorWallet) return;
+    const provider = new AnchorProvider(connection, anchorWallet, {
+      preflightCommitment: "confirmed",
+    });
+    const program = new Program(idl, idl.metadata.address, provider);
+    try {
+      const [tradePDA] = await web3.PublicKey.findProgramAddress(
+        [utf8.encode("trade"), anchorWallet.publicKey.toBuffer()],
+        program.programId
+      );
+
+      await program.methods
+        .update(inputBuyingPower, inputPortfolio)
+        .accounts({
+          tradeAccount: tradePDA,
+          authority: anchorWallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      const tradeAccount = await program.account.tradeAccount.fetch(tradePDA);
+      console.log("tradeAccount", tradeAccount);
+    } catch (err) {
+      console.log(err);
+    }
+  }
   function useAllData() {
     let allData: { [key: string]: APIData } = {};
     let err = false;
@@ -210,7 +358,7 @@ const Home: NextPage = () => {
     };
   }
 
-  function handleExecute(e: React.FormEvent) {
+  async function handleExecute(e: React.FormEvent) {
     e.preventDefault();
     let num = +amount;
 
@@ -224,29 +372,44 @@ const Home: NextPage = () => {
       num = Math.min(num, userBalance.buyingPower);
       setAmount(num.toString());
       setAmountErr(false);
-      setUserBalance({
-        ...userBalance,
-        buyingPower: userBalance.buyingPower - num,
-      });
+
+      let amount = num;
+      let average = data.ask;
       if (data.name in portfolio) {
-        let amount = oldValue.amount + num;
-        let average =
+        amount = oldValue.amount + num;
+        average =
           amount / (oldValue.amount / oldValue.average + num / data.ask);
-        setPortfolio((prev) => ({
-          ...prev,
-          [data.name]: {
-            amount,
-            average,
-          },
-        }));
-      } else {
-        setPortfolio((prev) => ({
-          ...prev,
-          [data.name]: {
-            amount: num,
-            average: data.ask,
-          },
-        }));
+      }
+
+      let newBuyingPower = userBalance.buyingPower - num;
+      if (isWallet && anchorWallet) {
+        let initPortfolio = [0, 0, 0, 0, 0, 0];
+        Object.entries(portfolio).map(([key, { amount, average }], i) => {
+          let index = 2 * portfolioFields[key];
+          initPortfolio[index] = amount;
+          initPortfolio[index + 1] = average;
+        });
+        initPortfolio[2 * portfolioFields[data.name]] = amount;
+        initPortfolio[2 * portfolioFields[data.name] + 1] = average;
+        await update(newBuyingPower, initPortfolio);
+      }
+      let newUserBalance = {
+        ...userBalance,
+        buyingPower: newBuyingPower,
+      };
+      let newPortfolio = {
+        ...portfolio,
+        [data.name]: {
+          amount,
+          average,
+        },
+      };
+      setUserBalance(newUserBalance);
+      setPortfolio(newPortfolio);
+
+      if (!isWallet) {
+        setCookie("portfolio", newPortfolio, { sameSite: true });
+        setCookie("balance", newUserBalance, { sameSite: true });
       }
       return;
     }
@@ -256,24 +419,40 @@ const Home: NextPage = () => {
       setAmount(num.toString());
       setAmountErr(false);
 
-      setUserBalance({
-        ...userBalance,
-        buyingPower: userBalance.buyingPower + num,
-      });
       let amount = oldValue.amount - oldValue.average * (num / data.bid);
       let average = oldValue.average;
+
+      let temp = { ...portfolio };
       if (amount <= 0) {
-        let temp = portfolio;
         delete temp[data.name];
-        setPortfolio({ ...temp });
       } else {
-        setPortfolio((prev) => ({
-          ...prev,
-          [data.name]: {
-            amount,
-            average,
-          },
-        }));
+        temp[data.name] = {
+          amount,
+          average,
+        };
+      }
+      let newBuyingPower = userBalance.buyingPower + num;
+
+      if (isWallet && anchorWallet) {
+        let initPortfolio = [0, 0, 0, 0, 0, 0];
+        Object.entries(temp).map(([key, { amount, average }], i) => {
+          let index = 2 * portfolioFields[key];
+          initPortfolio[index] = amount;
+          initPortfolio[index + 1] = average;
+        });
+
+        await update(newBuyingPower, initPortfolio);
+      }
+      let newUserBalance = {
+        ...userBalance,
+        buyingPower: newBuyingPower,
+      };
+      let newPortfolio = temp;
+      setUserBalance(newUserBalance);
+      setPortfolio(newPortfolio);
+      if (!isWallet) {
+        setCookie("portfolio", newPortfolio, { sameSite: true });
+        setCookie("balance", newUserBalance, { sameSite: true });
       }
       return;
     }
@@ -287,12 +466,36 @@ const Home: NextPage = () => {
   return (
     <Layout>
       <div className="p-16 px-96 h-full">
-        <Button variant="contained">
-          <WalletMultiButton />
-        </Button>
-        <SendSOLToRandomAddress />
-        <WalletDisconnectButton />
-
+        {isWallet && (
+          <>
+            <Button variant="contained">
+              <WalletMultiButton />
+            </Button>
+            <WalletDisconnectButton />
+          </>
+        )}
+        <div>
+          <Button
+            variant={isWallet ? "outlined" : "contained"}
+            onClick={() => {
+              deleteCookie("wallet");
+              setIsWallet(false);
+            }}
+            color="secondary"
+          >
+            Use Cookies
+          </Button>
+          <Button
+            variant={isWallet ? "contained" : "outlined"}
+            onClick={() => {
+              setCookie("wallet", true, { sameSite: true });
+              setIsWallet(true);
+            }}
+            color="secondary"
+          >
+            Use Wallet
+          </Button>
+        </div>
         <div className="border border-black w-full h-full grid gap-4">
           <div
             key="stats"
@@ -378,10 +581,16 @@ const Home: NextPage = () => {
                 value={amount}
               />
             )}
-
-            <Button variant="outlined" onClick={handleExecute}>
-              Execute market {isBuy ? "buy" : "sell"}
-            </Button>
+            {(!isWallet || (isWallet && isInitialize)) && (
+              <Button variant="outlined" onClick={handleExecute}>
+                Execute market {isBuy ? "buy" : "sell"}
+              </Button>
+            )}
+            {isWallet && !isInitialize && (
+              <Button variant="outlined" onClick={initialize}>
+                Initialize to trade with SOL Wallet
+              </Button>
+            )}
           </form>
           <div
             key="balance"

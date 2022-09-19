@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("CKGGMgd8CQgJMRhUYjai2F8QwAGKKsaDz559PbUghjbS");
+declare_id!("EkSeBQi7LrfwoiyGbqBxPMReRN5u9wZuxQ2f72HDaEhP");
 
 /**
  * Index references
@@ -8,7 +8,7 @@ declare_id!("CKGGMgd8CQgJMRhUYjai2F8QwAGKKsaDz559PbUghjbS");
  * 1/ ETH-PERP
  * 2/ SOL-PERP
  */
-const MAX_SIZE: usize = 8 + 32 + 8 + (8 + 8) * (3);
+const MAX_SIZE: usize = 8 + 8 + 1 + (8 + 8) * (3);
 #[error_code]
 pub enum Error {
     InvalidAuthority,
@@ -24,27 +24,23 @@ pub mod paperpetual_program {
         portfolio: [f64; 6],
     ) -> Result<()> {
         let trade_account = &mut ctx.accounts.trade_account;
-        trade_account.authority = *ctx.accounts.authority.key;
+
         trade_account.buying_power = buying_power;
         trade_account.portfolio = portfolio;
+        trade_account.bump = *ctx.bumps.get("trade_account").unwrap();
         Ok(())
     }
     pub fn update(ctx: Context<Update>, buying_power: f64, portfolio: [f64; 6]) -> Result<()> {
         let trade_account = &mut ctx.accounts.trade_account;
-        require_keys_eq!(
-            trade_account.authority,
-            ctx.accounts.signer.key(),
-            Error::InvalidAuthority
-        );
-        trade_account.buying_power = buying_power;
 
+        trade_account.buying_power = buying_power;
         trade_account.portfolio = portfolio;
         Ok(())
     }
 }
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    #[account(init, payer=authority, space=MAX_SIZE)]
+    #[account(init, payer=authority, space=MAX_SIZE, seeds=[b"trade", authority.key().as_ref()], bump)]
     pub trade_account: Account<'info, TradeAccount>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -53,13 +49,13 @@ pub struct Initialize<'info> {
 
 #[account]
 pub struct TradeAccount {
-    pub authority: Pubkey,
     pub buying_power: f64,
     pub portfolio: [f64; 6],
+    pub bump: u8,
 }
 #[derive(Accounts)]
 pub struct Update<'info> {
-    #[account(mut)]
+    #[account(mut, seeds=[b"trade",authority.key().as_ref()],bump=trade_account.bump)]
     pub trade_account: Account<'info, TradeAccount>,
-    pub signer: Signer<'info>,
+    pub authority: Signer<'info>,
 }
