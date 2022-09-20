@@ -11,7 +11,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
-      <header className="text-center p-20">
+      <header className="text-center p-14">
         <h1 className="text-7xl font-bold ">Paperpetual</h1>
       </header>
       <main className="flex-1">{children}</main>

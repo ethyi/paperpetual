@@ -7,7 +7,16 @@ import { stringify } from "querystring";
 import React, { ReactEventHandler, useEffect, useRef, useState } from "react";
 import Layout from "../components/layout";
 import useSWR from "swr";
-import { Input } from "@mui/material";
+import {
+  Input,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+} from "@mui/material";
 import { createSecureContext } from "tls";
 import { setCookie, getCookie, hasCookie, deleteCookie } from "cookies-next";
 
@@ -103,7 +112,7 @@ const Home: NextPage = () => {
   let [userBalance, setUserBalance] = useState<Balance>(initBalance);
 
   const [amount, setAmount] = useState("");
-  const [amountErr, setAmountErr] = useState(false);
+  const [amountErr, setAmountErr] = useState("");
   const [isBuy, setIsBuy] = useState(true);
   const [pair, setPair] = useState("BTC-PERP");
 
@@ -183,7 +192,6 @@ const Home: NextPage = () => {
             average: accPortfolio[index + 1],
           };
         });
-        console.log(initPortfolio);
       } else if (hasCookie("portfolio") && hasCookie("balance")) {
         let [tempPort, tempBalance] = [
           getCookie("portfolio"),
@@ -194,8 +202,6 @@ const Home: NextPage = () => {
           initBalance = JSON.parse(tempBalance.toString());
         }
       }
-      console.log(initPortfolio);
-      console.log(initBalance);
       setPortfolio(initPortfolio);
       setUserBalance(initBalance);
     };
@@ -208,9 +214,6 @@ const Home: NextPage = () => {
     const provider = new AnchorProvider(connection, anchorWallet, {
       preflightCommitment: "confirmed",
     });
-    console.log(idl.metadata);
-    console.log(idl);
-    // let programID = new PublicKey(')
     const program = new Program(idl, idl.metadata.address, provider);
     try {
       const [tradePDA] = await web3.PublicKey.findProgramAddress(
@@ -246,7 +249,6 @@ const Home: NextPage = () => {
 
       const accBuyingPower: number = tradeAccount.buyingPower;
       const accPortfolio = tradeAccount.portfolio as number[];
-      console.log("tradeAccount");
 
       let tradeBalance = { ...userBalance, buyingPower: accBuyingPower };
       let tradePortfolio: Portfolio = {};
@@ -255,8 +257,8 @@ const Home: NextPage = () => {
 
         if (accPortfolio[index] === 0) return;
         tradePortfolio[value] = {
-          amount: accPortfolio[index],
-          average: accPortfolio[index + 1],
+          amount: +accPortfolio[index],
+          average: +accPortfolio[index + 1],
         };
       });
       setUserBalance(tradeBalance);
@@ -289,7 +291,6 @@ const Home: NextPage = () => {
         })
         .rpc();
       const tradeAccount = await program.account.tradeAccount.fetch(tradePDA);
-      console.log("tradeAccount", tradeAccount);
     } catch (err) {
       console.log(err);
     }
@@ -314,9 +315,9 @@ const Home: NextPage = () => {
           name: data.name,
           volume: Math.round(data.volumeUsd24h).toLocaleString(),
           change: (parseFloat(data.change24h) * 100).toFixed(2),
-          ask: data.ask,
-          last: data.last,
-          bid: data.bid,
+          ask: data.ask.toFixed(2),
+          last: data.last.toFixed(2),
+          bid: data.bid.toFixed(2),
           source: "FTX",
         };
 
@@ -363,15 +364,18 @@ const Home: NextPage = () => {
     let num = +amount;
 
     if (!num || num <= 0) {
-      setAmountErr(true);
+      setAmountErr("Expected a positive number");
       return;
     }
 
     let oldValue = portfolio[data.name];
-    if (isBuy && userBalance.buyingPower > 0) {
+    if (isBuy) {
+      if (userBalance.buyingPower <= 0) {
+        setAmountErr("Insufficient Buying Power");
+        return;
+      }
       num = Math.min(num, userBalance.buyingPower);
       setAmount(num.toString());
-      setAmountErr(false);
 
       let amount = num;
       let average = data.ask;
@@ -386,11 +390,11 @@ const Home: NextPage = () => {
         let initPortfolio = [0, 0, 0, 0, 0, 0];
         Object.entries(portfolio).map(([key, { amount, average }], i) => {
           let index = 2 * portfolioFields[key];
-          initPortfolio[index] = amount;
-          initPortfolio[index + 1] = average;
+          initPortfolio[index] = +amount;
+          initPortfolio[index + 1] = +average;
         });
-        initPortfolio[2 * portfolioFields[data.name]] = amount;
-        initPortfolio[2 * portfolioFields[data.name] + 1] = average;
+        initPortfolio[2 * portfolioFields[data.name]] = +amount;
+        initPortfolio[2 * portfolioFields[data.name] + 1] = +average;
         await update(newBuyingPower, initPortfolio);
       }
       let newUserBalance = {
@@ -411,19 +415,20 @@ const Home: NextPage = () => {
         setCookie("portfolio", newPortfolio, { sameSite: true });
         setCookie("balance", newUserBalance, { sameSite: true });
       }
-      return;
-    }
-    if (!isBuy && data.name in portfolio) {
+    } else {
+      if (!(data.name in portfolio)) {
+        setAmountErr("Asset not owned");
+        return;
+      }
       let current = (data.bid * oldValue.amount) / oldValue.average;
       num = Math.min(num, current);
       setAmount(num.toString());
-      setAmountErr(false);
 
       let amount = oldValue.amount - oldValue.average * (num / data.bid);
       let average = oldValue.average;
 
       let temp = { ...portfolio };
-      if (amount <= 0) {
+      if (+amount.toFixed(4) <= 0) {
         delete temp[data.name];
       } else {
         temp[data.name] = {
@@ -454,27 +459,20 @@ const Home: NextPage = () => {
         setCookie("portfolio", newPortfolio, { sameSite: true });
         setCookie("balance", newUserBalance, { sameSite: true });
       }
-      return;
     }
-    setAmountErr(true);
+    setAmountErr("");
   }
   if (isError || allError) {
     return <div>failed to load</div>;
   }
   if (isLoading || allLoading || !data || !allData)
     return <div>loading...</div>;
+
   return (
     <Layout>
-      <div className="p-16 px-96 h-full">
-        {isWallet && (
-          <>
-            <Button variant="contained">
-              <WalletMultiButton />
-            </Button>
-            <WalletDisconnectButton />
-          </>
-        )}
-        <div>
+      <div className=" mt-14 m-auto max-w-6xl ">
+        <h2 className="text-md pb-2">Data Storage Method</h2>
+        <div className="flex items-end">
           <Button
             variant={isWallet ? "outlined" : "contained"}
             onClick={() => {
@@ -483,8 +481,9 @@ const Home: NextPage = () => {
             }}
             color="secondary"
           >
-            Use Cookies
+            Cookies
           </Button>
+          <div className="ml-4"></div>
           <Button
             variant={isWallet ? "contained" : "outlined"}
             onClick={() => {
@@ -493,18 +492,26 @@ const Home: NextPage = () => {
             }}
             color="secondary"
           >
-            Use Wallet
+            Devnet Solana Wallet
           </Button>
+          <div className="flex-1"></div>
+          {isWallet && (
+            <>
+              <WalletMultiButton />
+              <div className="ml-4"></div>
+              <WalletDisconnectButton />
+            </>
+          )}
         </div>
         <div className="border border-black w-full h-full grid gap-4">
           <div
             key="stats"
-            className="row-start-1 row-span-3 col-start-1 col-end-2 flex flex-col justify-center"
+            className="row-start-1 row-span-3 col-start-1 col-end-2 flex flex-col items-center p-8"
           >
-            <div>
+            <div className="flex">
               {Object.entries(pairs).map(([exchange, exchangePairs], index) => (
-                <div key={exchange}>
-                  {exchange}:
+                <div key={exchange} className="flex-1 flex flex-col">
+                  <h2 className="text-xl">{exchange}</h2>
                   {exchangePairs.map(([pairUrl, pairName], index) => (
                     <Button
                       variant={pairName === pair ? "contained" : "outlined"}
@@ -514,27 +521,83 @@ const Home: NextPage = () => {
                       }
                       value={pairName}
                     >
-                      {`${pairName}: ${allData[pairName]?.last} Vol:${allData[pairName]?.volume}, Change: ${allData[pairName]?.change}`}
+                      {`${pairName}: $${allData[pairName]?.last} | 24H Vol: $${allData[pairName]?.volume} | 24H %: ${allData[pairName]?.change}%`}
                     </Button>
                   ))}
                 </div>
               ))}
             </div>
-            <div className="border border-black">TICKER: {data.name}</div>
-            <div className="border border-black">
-              24h volume: ${data.volume}
+            <div className="mt-8 ">
+              <TableContainer component={Paper}>
+                <Table aria-label="simple table">
+                  <TableBody>
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        Ticker
+                      </TableCell>
+                      <TableCell align="right">{data.name}</TableCell>
+                    </TableRow>
+
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        24H Volume
+                      </TableCell>
+                      <TableCell align="right">${data.volume}</TableCell>
+                    </TableRow>
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        24H Change
+                      </TableCell>
+                      <TableCell align="right">{data.change}%</TableCell>
+                    </TableRow>
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        Ask
+                      </TableCell>
+                      <TableCell align="right">${data.ask}</TableCell>
+                    </TableRow>
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        Last
+                      </TableCell>
+                      <TableCell align="right">${data.last}</TableCell>
+                    </TableRow>
+
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        Bid
+                      </TableCell>
+                      <TableCell align="right">${data.bid}</TableCell>
+                    </TableRow>
+
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        Source
+                      </TableCell>
+                      <TableCell align="right">{data.source}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
             </div>
-            <div className="border border-black">
-              24h change: {data.change}%
-            </div>
-            <div className="border border-black">ASK: ${data.ask}</div>
-            <div className="border border-black">Last price: ${data.last}</div>
-            <div className="border border-black">BID: ${data.bid}</div>
-            <div className="border border-black">Source: {data.source}</div>
           </div>
           <form
             key="form"
-            className="row-start-1 row-end-2 col-start-2 col-end-3 h-full  p-4 flex flex-col text-center"
+            className="row-start-1 row-end-2 col-start-2 col-end-3 h-full  p-8 pb-0 flex flex-col text-center"
             onSubmit={handleExecute}
           >
             <div className="flex justify-center">
@@ -544,12 +607,14 @@ const Home: NextPage = () => {
                 onClick={() => {
                   setIsBuy(true);
                 }}
+                className="flex-1"
               >
                 Buy
               </Button>
               <Button
                 variant={!isBuy ? "contained" : "outlined"}
                 color="error"
+                className="flex-1"
                 onClick={() => {
                   setIsBuy(false);
                 }}
@@ -572,8 +637,8 @@ const Home: NextPage = () => {
                 error
                 id="filled-error-helper-text"
                 label="Error"
-                defaultValue="Hello World"
-                helperText="Enter a valid number"
+                defaultValue="Input Error"
+                helperText={amountErr}
                 variant="filled"
                 onChange={(e) => {
                   setAmount(e.target.value);
@@ -594,25 +659,100 @@ const Home: NextPage = () => {
           </form>
           <div
             key="balance"
-            className="row-start-2 row-end-4 col-start-2 col-end-3 h-full"
+            className="row-start-2 row-end-4 col-start-2 col-end-3 h-full p-8 pt-0"
           >
             <>
-              <div>Total Balance: {userBalance.balance}</div>
-              <div>Buying power: {userBalance.buyingPower}</div>
-              <div>PnL: {userBalance.pnl}</div>
-              <div>Current Portfolio Value: {userBalance.currentPortfolio}</div>
-              <div>Initial Portfolio Value: {userBalance.initialPortfolio}</div>
-              <div className="text-2xl">Portfolio</div>
-              {Object.entries(portfolio).map(([token, value]) => (
-                <div key={token}>{`${token}: ${
-                  value.amount / value.average
-                }, average ${value.average}, current: ${
-                  (allData[token].last * value.amount) / value.average
-                }, initial: ${value.amount}, positon pnl: ${
-                  (allData[token].last * value.amount) / value.average -
-                  value.amount
-                }`}</div>
-              ))}
+              <h2 className="text-xl py-4">User Balance</h2>
+              <TableContainer component={Paper}>
+                <Table aria-label="simple table">
+                  <TableBody>
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        Total Balance
+                      </TableCell>
+                      <TableCell align="right">
+                        ${userBalance.balance.toFixed(2)}
+                      </TableCell>
+                    </TableRow>
+
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        Buying Power
+                      </TableCell>
+                      <TableCell align="right">
+                        ${userBalance.buyingPower.toFixed(2)}
+                      </TableCell>
+                    </TableRow>
+
+                    <TableRow
+                      sx={{ "&:last-child td, &:last-child th": { border: 0 } }}
+                    >
+                      <TableCell component="th" scope="row">
+                        PNL
+                      </TableCell>
+                      <TableCell align="right">
+                        $ {userBalance.pnl.toFixed(2)}
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              <h2 className="text-xl py-4">Positions</h2>
+              <TableContainer component={Paper}>
+                <Table
+                  // sx={{ minWidth: 650 }}
+                  size="small"
+                  aria-label="a dense table"
+                >
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Ticker</TableCell>
+                      <TableCell align="right">Amount</TableCell>
+                      <TableCell align="right">Amount ($)</TableCell>
+                      <TableCell align="right">Average ($)</TableCell>
+                      <TableCell align="right">PNL ($)</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {Object.entries(portfolio).map(([token, value]) => (
+                      <TableRow
+                        key={token}
+                        sx={{
+                          "&:last-child td, &:last-child th": { border: 0 },
+                        }}
+                      >
+                        <TableCell component="th" scope="row">
+                          {token}
+                        </TableCell>
+                        <TableCell align="right">
+                          {(value.amount / value.average).toFixed(4)}
+                        </TableCell>
+                        <TableCell align="right">
+                          {(
+                            (value.amount / value.average) *
+                            allData[token].last
+                          ).toFixed(2)}
+                        </TableCell>
+                        <TableCell align="right">
+                          {(+value.average).toFixed(2)}
+                        </TableCell>
+                        <TableCell align="right">
+                          {(
+                            (allData[token].last * value.amount) /
+                              value.average -
+                            value.amount
+                          ).toFixed(2)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             </>
           </div>
         </div>
