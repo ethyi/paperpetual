@@ -15,8 +15,13 @@ function Layout({ children }: { children: React.ReactNode }) {
         <h1 className="text-7xl font-bold ">Paperpetual</h1>
       </header>
       <main className="flex-1">{children}</main>
-      <footer className="text-center p-2 bg-gray-200">
-        <a href="https://ethyi.de/" target="_blank" rel="noopener noreferrer">
+      <footer className="text-center p-2 bg-gray-200 ">
+        <a
+          className="no-underline hover:underline"
+          href="https://ethyi.de/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           Made by ethyi &copy; {new Date().getFullYear()}
         </a>
       </footer>
