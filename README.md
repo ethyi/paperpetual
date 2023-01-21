@@ -1,4 +1,6 @@
-# Paperpetual
+# Paperpetual [DEPRECATED]
+
+**Prices were sourced by FTX 🪦🪦**
 
 Paper perpetual contracts.
 
